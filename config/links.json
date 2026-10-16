@@ -1,0 +1,61 @@
+[
+    {
+        "id":"tcp-plc-01",
+        "type":"tcp",
+        "description":"1号产线主PLC",
+        "host":"127.0.0.1",
+        "port":5020,
+        "responseTimeoutMs":800,
+        "retries":3,
+        "retryIntervalMs":200
+    },
+
+    {
+        "id":"tcp-plc-02",
+        "type":"tcp",
+        "description":"2号产线主PLC",
+        "host":"127.0.0.1",
+        "port":5021,
+        "responseTimeoutMs":800,
+        "retries":3,
+        "retryIntervalMs":200
+    },
+    {
+        "id":"tcp-gw-01",
+        "type":"tcp",
+        "description":"电力仪表网关",
+        "host":"127.0.0.1",
+        "port":5022,
+        "responseTimeoutMs":800,
+        "retries":3,
+        "retryIntervalMs":200
+    },
+    {
+        "id":"rtu-bus-a",
+        "type":"serial",
+        "description":"一号车间485总线",
+        "serialPort": "COM11",
+        "baudRate":9600,
+        "dataBits":8,
+        "parity":0,
+        "stopBits":1,
+        "responseTimeoutMs":1000,
+        "retries":3,
+        "retryIntervalMs":300,
+        "interFrameDelayMs":20
+    },
+    {
+        "id":"rtu-bus-b",
+        "type":"serial",
+        "description":"二号车间485总线",
+        "serialPort": "COM12",
+        "baudRate":19200,
+        "dataBits":8,
+        "parity":2,
+        "stopBits":1,
+        "responseTimeoutMs":1000,
+        "retries":3,
+        "retryIntervalMs":300,
+        "interFrameDelayMs":20
+    }
+]

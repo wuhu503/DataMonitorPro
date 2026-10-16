@@ -5,12 +5,20 @@ find_package(Qt6 6.5 REQUIRED COMPONENTS Core Widgets)
 
 qt_standard_project_setup()
 
+# 把 src/ 设为头文件包含根，于是所有模块统一写成：
+#     #include "core/Types.h"
+#     #include "ui/MainWindow.h"
+# 包含路径本身就体现了分层。
+include_directories(${CMAKE_CURRENT_SOURCE_DIR}/src)
+
 qt_add_executable(DataMonitorPro
     WIN32 MACOSX_BUNDLE
-    main.cpp
-    MainWindow.cpp
-    MainWindow.h
-    MainWindow.ui
+    src/main.cpp
+    src/ui/MainWindow.cpp
+    src/ui/MainWindow.h
+    src/ui/MainWindow.ui
+    src/core/Types.h
+    src/core/Types.cpp
 )
 
 target_link_libraries(DataMonitorPro

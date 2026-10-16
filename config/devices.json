@@ -1,0 +1,82 @@
+[
+    {
+        "id":"plc-line1",
+        "name":"1号产线PLC",
+        "linkId":"tcp-plc-01",
+        "slaveId":1,
+        "enabled":true,
+        "description":"产线主控，采集节拍与产量"
+    },
+
+    {
+        "id":"plc-line2",
+        "name":"2号产线PLC",
+        "linkId":"tcp-plc-02",
+        "slaveId":1,
+        "enabled":true,
+        "description":"产线主控，采集节拍与产量"
+    },
+
+    {
+        "id":"meter-power-01",
+        "name":"1号电力仪表",
+        "linkId":"tcp-gw-01",
+        "slaveId":11,
+        "enabled":true,
+        "description":"网关下挂，三相电参数"
+    },
+
+    {
+        "id":"meter-power-02",
+        "name":"2号电力仪表",
+        "linkId":"tcp-gw-01",
+        "slaveId":12,
+        "enabled":true,
+        "description":"网关下挂，三相电参数"
+    },
+
+    {
+        "id":"meter-temp-01",
+        "name":"1号温度变送器",
+        "linkId":"rtu-bus-a",
+        "slaveId":21,
+        "enabled":true,
+        "description":"炉温监测"
+    },
+
+    {
+        "id":"meter-press-01",
+        "name":"1号压力变送器",
+        "linkId":"rtu-bus-a",
+        "slaveId":22,
+        "enabled":true,
+        "description":"液压系统压力"
+    },
+
+    {
+        "id":"meter-level-01",
+        "name":"1号液位计",
+        "linkId":"rtu-bus-b",
+        "slaveId":31,
+        "enabled":true,
+        "description":"储罐液位"
+    },
+
+    {
+        "id":"meter-flow-01",
+        "name":"1号流量计",
+        "linkId":"rtu-bus-b",
+        "slaveId":32,
+        "enabled":true,
+        "description":"管道瞬时/累计流量"
+    },
+
+    {
+        "id":"meter-vib-01",
+        "name":"1号振动传感器",
+        "linkId":"rtu-bus-b",
+        "slaveId":33,
+        "enabled":false,
+        "description":"预留，暂未接线"
+    }
+]
