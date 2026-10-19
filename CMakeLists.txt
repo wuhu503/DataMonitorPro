@@ -19,12 +19,25 @@ qt_add_executable(DataMonitorPro
     src/ui/MainWindow.ui
     src/core/Types.h
     src/core/Types.cpp
+    src/core/ConfigIssue.h
+    src/core/SystemConfig.h
+    src/core/ConfigLoader.h
+    src/core/ConfigLoader.cpp
 )
 
 target_link_libraries(DataMonitorPro
     PRIVATE
         Qt::Core
         Qt::Widgets
+)
+
+# 把源码树里的 config/ 目录路径编译进程序。
+# 现在程序从源码目录读配置；等发布形态定下来，再加"优先读可执行文件
+# 旁边的 config/" 那一层。
+# Windows 路径统一换成正斜杠，避免反斜杠在字符串字面量里被当成转义符。
+string(REPLACE "\\" "/" DM_CONFIG_DIR_NORMALIZED "${CMAKE_SOURCE_DIR}/config")
+target_compile_definitions(DataMonitorPro PRIVATE
+    DM_SOURCE_CONFIG_DIR="${DM_CONFIG_DIR_NORMALIZED}"
 )
 
 install(TARGETS DataMonitorPro
