@@ -250,9 +250,7 @@ void selfTestConfigLoader()
         QString line = QStringLiteral("    %1").arg(link.id, -14);
         line += (QStringLiteral("type=") + dm::linkTypeKey(link.type)).leftJustified(12);
 
-        // 按类型显示各自的连接参数。
-        // 串口那份还没实现，所以现在会显示成 "serial="（后面空着）——
-        // 这个空白本身就是有用的信息：它说明串口字段还没读。
+        // 按类型显示各自的连接参数
         QString where;
         if (link.type == dm::LinkType::Tcp)
             where = QStringLiteral("tcp=%1:%2").arg(link.host).arg(link.port);
@@ -328,6 +326,78 @@ void selfTestConfigLoader()
         check(spindle->pollGroup == dm::PollGroup::Fast,
               QStringLiteral("spindle pollGroup == fast"));
     }
+
+    // ---- SystemConfig：先把三份数据装进盒子 ----
+    qDebug().noquote() << "=== SystemConfig self-check ===";
+
+    dm::SystemConfig cfg;
+    cfg.setLinks(links);
+    cfg.setDevices(devices);
+    cfg.setPoints(points);
+
+    check(cfg.links().size() == 5, QStringLiteral("SystemConfig holds 5 links"));
+    check(cfg.devices().size() == 9, QStringLiteral("SystemConfig holds 9 devices"));
+    check(cfg.points().size() == 29, QStringLiteral("SystemConfig holds 29 points"));
+
+    QVector<dm::ConfigIssue> cfgIssues;
+    const bool cfgOk = cfg.rebuildIndexes(&cfgIssues);
+    for (const dm::ConfigIssue &issue : cfgIssues)
+        qDebug().noquote() << "  " << issue.toString();
+
+    check(cfgOk, QStringLiteral("rebuildIndexes returns true"));
+    check(cfgIssues.isEmpty(), QStringLiteral("no cross-file issues"));
+
+    const dm::LinkConfig *busA = cfg.link(QStringLiteral("rtu-bus-a"));
+    check(busA != nullptr, QStringLiteral("link(rtu-bus-a) found"));
+    check(busA && busA->type == dm::LinkType::Serial,
+          QStringLiteral("rtu-bus-a is serial"));
+    check(busA && busA->serialPort == QStringLiteral("COM11"),
+          QStringLiteral("rtu-bus-a is COM11"));
+    check(cfg.link(QStringLiteral("not-a-real-id")) == nullptr,
+          QStringLiteral("missing link returns nullptr"));
+
+    const dm::DeviceConfig *tempDev = cfg.device(QStringLiteral("meter-temp-01"));
+    check(tempDev != nullptr, QStringLiteral("device(meter-temp-01) found"));
+    check(tempDev && tempDev->linkId == QStringLiteral("rtu-bus-a"),
+          QStringLiteral("meter-temp-01 belongs to rtu-bus-a"));
+    check(cfg.device(QStringLiteral("not-a-real-id")) == nullptr,
+          QStringLiteral("missing device returns nullptr"));
+
+    const dm::PointConfig *tempPt = cfg.point(QStringLiteral("p-temp1-value"));
+    check(tempPt != nullptr, QStringLiteral("point(p-temp1-value) found"));
+    check(tempPt && tempPt->deviceId == QStringLiteral("meter-temp-01"),
+          QStringLiteral("p-temp1-value belongs to meter-temp-01"));
+    check(cfg.point(QStringLiteral("not-a-real-id")) == nullptr,
+          QStringLiteral("missing point returns nullptr"));
+
+    check(cfg.devicesOfLink(QStringLiteral("rtu-bus-a")).size() == 2,
+          QStringLiteral("rtu-bus-a has 2 devices"));
+    check(cfg.pointsOfDevice(QStringLiteral("meter-temp-01")).size() == 3,
+          QStringLiteral("meter-temp-01 has 3 points"));
+    check(cfg.pointsOfLink(QStringLiteral("rtu-bus-a")).size() == 5,
+          QStringLiteral("rtu-bus-a has 5 points"));
+    check(cfg.pointsOfLink(QStringLiteral("rtu-bus-b")).size() == 4,
+          QStringLiteral("rtu-bus-b has 4 pollable points (disabled device excluded)"));
+    check(cfg.pointsOfLink(QStringLiteral("not-a-real-id")).isEmpty(),
+          QStringLiteral("unknown link yields no points"));
+    check(cfg.pointCountOfDevice(QStringLiteral("plc-line1")) == 6,
+          QStringLiteral("plc-line1 has 6 points"));
+    check(cfg.devicesOfLink(QStringLiteral("not-a-real-id")).isEmpty(),
+          QStringLiteral("unknown link returns empty list"));
+    check(cfg.summary() == QStringLiteral("链路 5 · 设备 9 · 点位 29"),
+          QStringLiteral("summary reports 5/9/29"));
+
+    qDebug().noquote() << QStringLiteral("  %1").arg(cfg.summary());
+    qDebug().noquote() << QStringLiteral("  pointsOfLink(\"rtu-bus-a\"):");
+    for (const dm::PointConfig *pt : cfg.pointsOfLink(QStringLiteral("rtu-bus-a")))
+        qDebug().noquote() << QStringLiteral("    %1  %2  %3")
+                                  .arg(pt->id, -24)
+                                  .arg(dm::dataTypeKey(pt->dataType), -9)
+                                  .arg(pt->unit);
+
+    cfg.clear();
+    check(cfg.links().isEmpty() && cfg.devices().isEmpty() && cfg.points().isEmpty(),
+          QStringLiteral("clear() empties all data"));
 
     qDebug().noquote() << QStringLiteral("=== ConfigLoader self-check done ===");
 }

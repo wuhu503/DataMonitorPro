@@ -2,8 +2,10 @@
 #define DM_CONFIG_ISSUE_H
 
 #include <QString>
+#include <QVector>
 
 namespace dm {
+
 struct ConfigIssue
 {
 
@@ -36,6 +38,22 @@ struct ConfigIssue
         return QStringLiteral("%1: %2: %3").arg(kind, where, message);
     }
 };
+
+inline void addIssue(QVector<ConfigIssue> *issues,
+                     const QString &file,
+                     int index,
+                     const QString &field,
+                     const QString &message,
+                     ConfigIssue::Severity severity = ConfigIssue::Severity::Error)
+{
+    ConfigIssue issue;
+    issue.severity = severity;
+    issue.file = file;
+    issue.index = index;
+    issue.field = field;
+    issue.message = message;
+    issues->append(issue);
+}
 
 } // namespace dm
 

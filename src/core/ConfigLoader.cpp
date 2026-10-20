@@ -17,23 +17,6 @@ const QString kLinksFile = QStringLiteral("links.json");
 const QString kDeviceFile = QStringLiteral("devices.json");
 const QString kPointsFile = QStringLiteral("points.json");
 
-//报错记录
-void addIssue(QVector<ConfigIssue> *issues,
-              const QString &file,
-              int index,
-              const QString &field,
-              const QString &message,
-              ConfigIssue::Severity severity = ConfigIssue::Severity::Error)
-{
-    ConfigIssue issue;
-    issue.severity = severity;
-    issue.file = file;
-    issue.index = index;
-    issue.field = field;
-    issue.message = message;
-    issues->append(issue);
-}
-
 //从pareseError里找到准确的行号和大致的列号
 void lineColumnOf(const QByteArray &data, int offset, int *line, int *column)
 {
@@ -194,7 +177,7 @@ bool readOptionalString(const QJsonObject &obj,
         return false;
     }
 
-    *out = jsonValue.toString();
+    *out = jsonValue.toString().trimmed();
     return true;
 }
 
@@ -394,6 +377,20 @@ bool ConfigLoader::loadLinks(const QString &configDir,
             {
                 linkOk = false;
             }
+        }
+
+        // 类型与字段不匹配：不阻断，但多半是 type 写错了
+        if (link.type == LinkType::Tcp && obj.contains(QStringLiteral("serialPort")))
+        {
+            addIssue(issues, kLinksFile, i, QStringLiteral("serialPort"),
+                     QStringLiteral("TCP 链路不应有 serialPort 字段，请确认 type"),
+                     ConfigIssue::Severity::Warning);
+        }
+        else if (link.type == LinkType::Serial && obj.contains(QStringLiteral("host")))
+        {
+            addIssue(issues, kLinksFile, i, QStringLiteral("host"),
+                     QStringLiteral("串口链路不应有 host 字段，请确认 type"),
+                     ConfigIssue::Severity::Warning);
         }
 
         if (!linkOk)
@@ -645,6 +642,47 @@ bool ConfigLoader::loadPoints(const QString &configDir,
         // decimals
         if (!readOptionalInt(obj, kPointsFile, QStringLiteral("decimals"), 0, 6, i, issues, &point.decimals))
             pointOk = false;
+
+        // ---- 跨字段语义校验 ----
+        if (point.scale == 0.0)
+        {
+            addIssue(issues, kPointsFile, i, QStringLiteral("scale"),
+                     QStringLiteral("scale 不能为 0，否则物理量恒等于 offset"));
+            pointOk = false;
+        }
+
+        if (point.alarmLevel != AlarmLevel::None && point.alarmLow >= point.alarmHigh)
+        {
+            addIssue(issues, kPointsFile, i, QStringLiteral("alarmLow"),
+                     QStringLiteral("报警下限 %1 必须小于上限 %2")
+                         .arg(point.alarmLow).arg(point.alarmHigh));
+            pointOk = false;
+        }
+
+        const int span = registerSpan(point.dataType);
+        if (int(point.address) + span - 1 > 65535)
+        {
+            addIssue(issues, kPointsFile, i, QStringLiteral("address"),
+                     QStringLiteral("地址 %1 加 %2 个寄存器后超出 65535")
+                         .arg(point.address).arg(span));
+            pointOk = false;
+        }
+
+        if ((point.funcCode == 1 || point.funcCode == 2) && span > 1)
+        {
+            addIssue(issues, kPointsFile, i, QStringLiteral("dataType"),
+                     QStringLiteral("功能码 %1 是位访问，不能使用 32 位类型")
+                         .arg(point.funcCode));
+            pointOk = false;
+        }
+
+        if (point.alarmLevel == AlarmLevel::None
+            && (point.alarmLow != 0.0 || point.alarmHigh != 0.0))
+        {
+            addIssue(issues, kPointsFile, i, QStringLiteral("alarmLevel"),
+                     QStringLiteral("配置了报警阈值但 alarmLevel 为 none，该点位不会报警"),
+                     ConfigIssue::Severity::Warning);
+        }
 
         if (!pointOk)
             continue;

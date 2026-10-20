@@ -88,7 +88,7 @@ public:
     const QVector<DeviceConfig> &devices() const { return m_devices; }
     const QVector<PointConfig>  &points() const  { return m_points; }
 
-    //按id查单个对象
+    //按id查单个对象找不到返回nullptr
     const LinkConfig   *link(const QString &id) const;
     const DeviceConfig *device(const QString &id) const;
     const PointConfig  *point(const QString &id) const;

@@ -23,6 +23,7 @@ qt_add_executable(DataMonitorPro
     src/core/SystemConfig.h
     src/core/ConfigLoader.h
     src/core/ConfigLoader.cpp
+    src/core/SystemConfig.cpp
 )
 
 target_link_libraries(DataMonitorPro
