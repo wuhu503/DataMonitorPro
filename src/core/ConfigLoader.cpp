@@ -16,6 +16,23 @@ namespace {
 const QString kLinksFile = QStringLiteral("links.json");
 const QString kDeviceFile = QStringLiteral("devices.json");
 
+//报错记录
+void addIssue(QVector<ConfigIssue> *issues,
+              const QString &file,
+              int index,
+              const QString &field,
+              const QString &message,
+              ConfigIssue::Severity severity = ConfigIssue::Severity::Error)
+{
+    ConfigIssue issue;
+    issue.severity = severity;
+    issue.file = file;
+    issue.index = index;
+    issue.field = field;
+    issue.message = message;
+    issues->append(issue);
+}
+
 //从pareseError里找到准确的行号和大致的列号
 void lineColumnOf(const QByteArray &data, int offset, int *line, int *column)
 {
@@ -52,10 +69,7 @@ bool readJsonArray(const QString &configDir,
     QFile file(path);
     if (!file.open(QIODevice::ReadOnly))
     {
-        ConfigIssue issue;
-        issue.file = fileName;
-        issue.message = QStringLiteral("无法打开文件 %1：%2").arg(path, file.errorString());
-        issues->append(issue);
+        addIssue(issues, fileName, -1, QString(), QStringLiteral("无法打开文件 %1：%2").arg(path, file.errorString()));
         return false;
     }
 
@@ -70,22 +84,17 @@ bool readJsonArray(const QString &configDir,
         int column = 0;
         lineColumnOf(data, parseError.offset, &line, &column);
 
-        ConfigIssue issue;
-        issue.file = fileName;
-        issue.message = QStringLiteral("JSON 语法错误：%1（第 %2 行，第 %3 列）")
-                            .arg(parseError.errorString())
-                            .arg(line)
-                            .arg(column);
-        issues->append(issue);
+        addIssue(issues, fileName, -1, QString(), QStringLiteral("JSON 语法错误：%1（第 %2 行，第 %3 列）")
+                                                 .arg(parseError.errorString())
+                                                 .arg(line)
+                                                 .arg(column)
+                 );
         return false;
     }
 
     if (!doc.isArray())
     {
-        ConfigIssue issue;
-        issue.file = fileName;
-        issue.message = QStringLiteral("顶层必须是数组，形如 [ {\"id\": ...}, {...} ]");
-        issues->append(issue);
+        addIssue(issues, fileName, -1, QString(), QStringLiteral("顶层必须是数组，形如 [ {\"id\": ...}, {...} ]"));
         return false;
     }
 
@@ -93,20 +102,23 @@ bool readJsonArray(const QString &configDir,
     return true;
 }
 
-void addIssue(QVector<ConfigIssue> *issues,
-              const QString &file,
-              int index,
-              const QString &field,
-              const QString &message,
-              ConfigIssue::Severity severity = ConfigIssue::Severity::Error)
+//必读字段处理
+bool readRequiredString(const QJsonObject &obj,
+                        const QString &fileName,
+                        const QString &key,
+                        int index,
+                        QVector<ConfigIssue> *issues,
+                        QString *out)
 {
-    ConfigIssue issue;
-    issue.severity = severity;
-    issue.file = file;
-    issue.index = index;
-    issue.field = field;
-    issue.message = message;
-    issues->append(issue);
+    const QJsonValue jsonValue = obj.value(key);
+    if (!jsonValue.isString() || jsonValue.toString().trimmed().isEmpty())
+    {
+        addIssue(issues, fileName, index, key, QStringLiteral("%1 是必填字段，且必须是非空字符串").arg(key));
+        return false;
+    }
+
+    *out = jsonValue.toString().trimmed();
+    return true;
 }
 
 bool readOptionalInt(const QJsonObject &obj,
@@ -140,6 +152,26 @@ bool readOptionalInt(const QJsonObject &obj,
 
     *out = intValue;
     return true;
+}
+
+//必填整数
+bool readRequiredInt(const QJsonObject &obj,
+                     const QString &fileName,
+                     const QString &key,
+                     int minValue,
+                     int maxValue,
+                     int index,
+                     QVector<ConfigIssue> *issues,
+                     int *out)
+{
+    if (!obj.contains(key))
+    {
+        addIssue(issues, fileName, index, key,
+                 QStringLiteral("%1 是必填字段").arg(key));
+        return false;
+    }
+
+    return readOptionalInt(obj, fileName, key, minValue, maxValue, index, issues, out);
 }
 
 bool readOptionalString(const QJsonObject &obj,
@@ -211,7 +243,7 @@ bool ConfigLoader::loadLinks(const QString &configDir,
 
         if (!value.isObject())
         {
-            addIssue(issues, kLinksFile, i, NULL, QStringLiteral("数组元素必须是对象 { ... }"));
+            addIssue(issues, kLinksFile, i, QString(), QStringLiteral("数组元素必须是对象 { ... }"));
             continue;
         }
 
@@ -219,13 +251,10 @@ bool ConfigLoader::loadLinks(const QString &configDir,
         LinkConfig link;
 
         //必填ID
-        const QJsonValue idValue = obj.value(QStringLiteral("id"));
-        if (!idValue.isString() || idValue.toString().isEmpty())
+        if (!readRequiredString(obj, kLinksFile, QStringLiteral("id"), i, issues, &link.id))
         {
-            addIssue(issues, kLinksFile, i, QStringLiteral("id"), QStringLiteral("缺少必填字段，或它不是非空字符串"));
             continue;
         }
-        link.id = idValue.toString();
 
         //必填type，必须是已知值
         const QJsonValue typeValue = obj.value(QStringLiteral("type"));
@@ -267,17 +296,10 @@ bool ConfigLoader::loadLinks(const QString &configDir,
         if (link.type == LinkType::Tcp)
         {
             //host校验
-            const QJsonValue hostValue = obj.value(QStringLiteral("host"));
-            if (!hostValue.isString() || hostValue.toString().trimmed().isEmpty())
+            if (!readRequiredString(obj, kLinksFile, QStringLiteral("host"), i, issues, &link.host))
             {
-                addIssue(issues, kLinksFile, i, QStringLiteral("host"), QStringLiteral("TCP 链路必须提供 host"));
                 linkOk = false;
             }
-            else
-            {
-                link.host = hostValue.toString().trimmed();
-            }
-
             //port校验
             int portValue = 502;
             if (!readOptionalInt(obj, kLinksFile, QStringLiteral("port"), 1, 65535, i, issues, &portValue))
@@ -293,15 +315,9 @@ bool ConfigLoader::loadLinks(const QString &configDir,
         else if(link.type == LinkType::Serial)
         {
             //port校验
-            const QJsonValue serialPortValue = obj.value(QStringLiteral("serialPort"));
-            if (!serialPortValue.isString() || serialPortValue.toString().isEmpty())
+            if (!readRequiredString(obj, kLinksFile, QStringLiteral("serialPort"), i, issues, &link.serialPort))
             {
-                addIssue(issues, kLinksFile, i, QStringLiteral("serialPort"), QStringLiteral("缺少必填字段，或它不是非空字符串"));
                 linkOk = false;
-            }
-            else
-            {
-                link.serialPort = serialPortValue.toString();
             }
 
             //baud校验
@@ -395,21 +411,18 @@ bool ConfigLoader::loadDevices(const QString &configDir,
         //顶层必须为数组
         if (!value.isObject())
         {
-            addIssue(issues, kDeviceFile, i, NULL, QStringLiteral("数组元素必须是对象 { ... }"));
+            addIssue(issues, kDeviceFile, i, QString(), QStringLiteral("数组元素必须是对象 { ... }"));
             continue;
         }
 
         const QJsonObject obj = value.toObject();
+        DeviceConfig device;
 
         //必填Id
-        const QJsonValue idValue = obj.value(QStringLiteral("id"));
-        DeviceConfig device;
-        if(!idValue.isString() || idValue.toString().isEmpty())
+        if (!readRequiredString(obj, kDeviceFile, QStringLiteral("id"), i, issues, &device.id))
         {
-            addIssue(issues, kDeviceFile, i, QStringLiteral("id"), QStringLiteral("必填字段不能为空"));
             continue;
         }
-        device.id = idValue.toString();
 
         //name非必填，无则id填充
         QString name;
@@ -422,29 +435,18 @@ bool ConfigLoader::loadDevices(const QString &configDir,
             device.name = name.isEmpty() ? device.id : name;
         }
 
-        //必填linkIdValue校验
-        const QJsonValue linkIdValue = obj.value(QStringLiteral("linkId"));
-        if(!linkIdValue.isString() || linkIdValue.toString().isEmpty())
+        //必填linkId校验
+        if (!readRequiredString(obj, kDeviceFile, QStringLiteral("linkId"), i, issues, &device.linkId))
         {
-            addIssue(issues, kDeviceFile, i, QStringLiteral("linkId"), QStringLiteral("必填字段不能为空"));
             continue;
         }
-        device.linkId = linkIdValue.toString().trimmed();
 
         //slaveId校验
-        const QJsonValue slaveIdValue = obj.value(QStringLiteral("slaveId"));
-        if(!slaveIdValue.isDouble())
+        if (!readRequiredInt(obj, kDeviceFile, QStringLiteral("slaveId"), 1, 247,
+                             i, issues, &device.slaveId))
         {
-            addIssue(issues, kDeviceFile, i, QStringLiteral("slaveId"), QStringLiteral("必填字段不能为空"));
             continue;
         }
-        int slaveId = slaveIdValue.toInt();
-        if(slaveId < 1 || slaveId > 247 )
-        {
-            addIssue(issues, kDeviceFile, i, QStringLiteral("slaveId"), QStringLiteral("salveId超出范围1..247,实际为%1").arg(slaveId));
-            continue;
-        }
-        device.slaveId = slaveId;
 
         //enabled校验
         if(!readOptionalBool(obj, kDeviceFile, QStringLiteral("enabled"), i, issues, &device.enabled))
