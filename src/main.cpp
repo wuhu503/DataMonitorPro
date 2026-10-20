@@ -288,6 +288,47 @@ void selfTestConfigLoader()
         qDebug().noquote() << line;
     }
 
+    // ---- points.json ----
+    QVector<dm::PointConfig> points;
+    QVector<dm::ConfigIssue> pointIssues;
+    const bool ptOk = dm::ConfigLoader::loadPoints(configDir, &points, &pointIssues);
+
+    for (const dm::ConfigIssue &issue : pointIssues)
+        qDebug().noquote() << "  " << issue.toString();
+
+    check(ptOk, QStringLiteral("loadPoints returns true"));
+    check(pointIssues.isEmpty(), QStringLiteral("no point issues"));
+    check(points.size() == 29, QStringLiteral("points.json contains 29 points"));
+
+    for (const dm::PointConfig &pt : points) {
+        QString line = QStringLiteral("    %1").arg(pt.id, -24);
+        line += QStringLiteral("%1").arg(pt.deviceId, -18);
+        line += QStringLiteral("fc%1 ").arg(pt.funcCode);
+        line += QStringLiteral("addr=%1").arg(pt.address, -7);
+        line += QStringLiteral("%1").arg(dm::dataTypeKey(pt.dataType), -9);
+        line += QStringLiteral("%1").arg(dm::byteOrderKey(pt.byteOrder), -6);
+        line += QStringLiteral("scale=%1").arg(pt.scale, -7);
+        line += QStringLiteral("db=%1").arg(pt.deadband, -6);
+        line += pt.unit;
+        qDebug().noquote() << line;
+    }
+
+    // 定点抽查：这几个字段在 points.json 里都写了非默认值。
+    // 如果读取时 key 拼错（比如 deadband 写成 deadbandt），这里会立刻报红。
+    const dm::PointConfig *spindle = nullptr;
+    for (const dm::PointConfig &pt : points) {
+        if (pt.id == QStringLiteral("p-line1-spindle-speed"))
+            spindle = &pt;
+    }
+    check(spindle != nullptr, QStringLiteral("found p-line1-spindle-speed"));
+    if (spindle) {
+        check(spindle->deadband == 5.0, QStringLiteral("spindle deadband == 5"));
+        check(spindle->byteOrder == dm::ByteOrder::CDAB,
+              QStringLiteral("spindle byteOrder == CDAB"));
+        check(spindle->pollGroup == dm::PollGroup::Fast,
+              QStringLiteral("spindle pollGroup == fast"));
+    }
+
     qDebug().noquote() << QStringLiteral("=== ConfigLoader self-check done ===");
 }
 

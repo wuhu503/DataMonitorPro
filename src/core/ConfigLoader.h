@@ -19,6 +19,10 @@ public:
     static bool loadDevices(const QString &configDir,
                           QVector<DeviceConfig> *out,
                           QVector<ConfigIssue> *issues);
+
+    static bool loadPoints(const QString &configDir,
+                           QVector<PointConfig> *out,
+                           QVector<ConfigIssue> *issues);
 };
 
 } // namespace dm

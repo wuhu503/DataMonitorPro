@@ -15,6 +15,7 @@ namespace {
 
 const QString kLinksFile = QStringLiteral("links.json");
 const QString kDeviceFile = QStringLiteral("devices.json");
+const QString kPointsFile = QStringLiteral("points.json");
 
 //报错记录
 void addIssue(QVector<ConfigIssue> *issues,
@@ -216,6 +217,28 @@ bool readOptionalBool(const QJsonObject &obj,
     }
 
     *out = jsonValue.toBool();
+    return true;
+}
+
+bool readOptionalDouble(const QJsonObject &obj,
+                        const QString &fileName,
+                        const QString &key,
+                        int index,
+                        QVector<ConfigIssue> *issues,
+                        double *out)
+{
+    const QJsonValue jsonValue = obj.value(key);
+    if(jsonValue.isUndefined())
+    {
+        return true;
+    }
+    if(!jsonValue.isDouble())
+    {
+        addIssue(issues, fileName, index, key, QStringLiteral("输入错误的数据类型"));
+        return false;
+    }
+
+    *out = jsonValue.toDouble();
     return true;
 }
 
@@ -468,6 +491,168 @@ bool ConfigLoader::loadDevices(const QString &configDir,
 
     //本次调用只要产生过一条 Error，整体就算失败
     for (int k = issueCountBefore; k < issues->size(); ++k) {
+        if (issues->at(k).isError())
+            return false;
+    }
+    return true;
+}
+
+bool ConfigLoader::loadPoints(const QString &configDir,
+                              QVector<PointConfig> *out,
+                              QVector<ConfigIssue> *issues)
+{
+    out->clear();
+
+    QJsonArray array;
+    if (!readJsonArray(configDir, kPointsFile, &array, issues))
+    {
+        return false;
+    }
+    const int issueCountBefore = issues->size();
+    for(int i = 0; i<array.size(); ++i)
+    {
+        QJsonValue value = array.at(i);
+        //判断顶层数组
+        if (!value.isObject())
+        {
+            addIssue(issues, kPointsFile, i, QString(), QStringLiteral("数组元素必须是对象 { ... }"));
+            continue;
+        }
+        const QJsonObject obj = value.toObject();
+        PointConfig point;
+
+        //必填id
+        if(!readRequiredString(obj, kPointsFile, QStringLiteral("id"), i, issues, &point.id))
+        {
+            continue;
+        }
+
+        //必填deviceId
+        if(!readRequiredString(obj, kPointsFile, QStringLiteral("deviceId"), i, issues, &point.deviceId))
+        {
+            continue;
+        }
+
+        //必填funcCode
+        if(!readRequiredInt(obj, kPointsFile, QStringLiteral("funcCode"), 1, 4, i, issues, &point.funcCode))
+        {
+            continue;
+        }
+
+        //必填address
+        int addressValue = 0;
+        if(!readRequiredInt(obj, kPointsFile, QStringLiteral("address"), 0, 65535, i, issues, &addressValue))
+        {
+            continue;
+        }
+        point.address = static_cast<quint16>(addressValue);
+
+        //必填dataType
+        QString dataTypeText;
+        if(!readRequiredString(obj, kPointsFile, QStringLiteral("dataType"), i, issues, &dataTypeText))
+        {
+            continue;
+        }
+        if (!parseDataType(dataTypeText, &point.dataType))
+        {
+            addIssue(issues, kPointsFile, i, QStringLiteral("dataType"),
+                     QStringLiteral("未知的数据类型 \"%1\"，可选值：uint16 / int16 / uint32 / int32 / float32")
+                         .arg(dataTypeText));
+            continue;
+        }
+
+        bool pointOk = true;
+        //name校验
+        QString name;
+        if (!readOptionalString(obj, kPointsFile, QStringLiteral("name"), i, issues, &name))
+        {
+            pointOk = false;
+        }
+        else
+        {
+            point.name = name.isEmpty() ? point.id : name;
+        }
+
+        //byteOrder校验
+        QString byteOrderText = byteOrderKey(point.byteOrder);     // 默认 "ABCD"
+        if (!readOptionalString(obj, kPointsFile, QStringLiteral("byteOrder"), i, issues, &byteOrderText))
+        {
+            pointOk = false;
+        }
+        else if (!parseByteOrder(byteOrderText, &point.byteOrder))
+        {
+            addIssue(issues, kPointsFile, i, QStringLiteral("byteOrder"),
+                     QStringLiteral("未知的字节序 \"%1\"，可选值：ABCD / CDAB / BADC / DCBA").arg(byteOrderText));
+            pointOk = false;
+        }
+
+        //pollGroup校验
+        QString pollGroupText = pollGroupKey(point.pollGroup);
+        if (!readOptionalString(obj, kPointsFile, QStringLiteral("pollGroup"), i, issues, &pollGroupText))
+        {
+            pointOk = false;
+        }
+        else if (!parsePollGroup(pollGroupText, &point.pollGroup))
+        {
+            addIssue(issues, kPointsFile, i, QStringLiteral("pollGroup"),
+                     QStringLiteral("未知的轮询分组 \"%1\"，可选值：fast / normal / slow").arg(pollGroupText));
+            pointOk = false;
+        }
+
+        //alarmLevel校验
+        QString alarmLevelText = alarmLevelKey(point.alarmLevel);
+        if (!readOptionalString(obj, kPointsFile, QStringLiteral("alarmLevel"), i, issues, &alarmLevelText))
+        {
+            pointOk = false;
+        }
+        else if (!parseAlarmLevel(alarmLevelText, &point.alarmLevel))
+        {
+            addIssue(issues, kPointsFile, i, QStringLiteral("alarmLevel"),
+                     QStringLiteral("未知的报警等级 \"%1\"，可选值：none / warning / major / critical").arg(alarmLevelText));
+            pointOk = false;
+        }
+
+        //scale
+        if (!readOptionalDouble(obj, kPointsFile, QStringLiteral("scale"), i, issues, &point.scale))
+        {
+            pointOk = false;
+        }
+        //offset
+        if (!readOptionalDouble(obj, kPointsFile, QStringLiteral("offset"), i, issues, &point.offset))
+        {
+            pointOk = false;
+        }
+        //deadband
+        if (!readOptionalDouble(obj, kPointsFile, QStringLiteral("deadband"), i, issues, &point.deadband))
+        {
+            pointOk = false;
+        }
+        //alarmLow
+        if (!readOptionalDouble(obj, kPointsFile, QStringLiteral("alarmLow"), i, issues, &point.alarmLow))
+        {
+            pointOk = false;
+        }
+        //alarmHigh
+        if (!readOptionalDouble(obj, kPointsFile, QStringLiteral("alarmHigh"), i, issues, &point.alarmHigh))
+        {
+            pointOk = false;
+        }
+
+        // unit
+        if (!readOptionalString(obj, kPointsFile, QStringLiteral("unit"), i, issues, &point.unit))
+            pointOk = false;
+
+        // decimals
+        if (!readOptionalInt(obj, kPointsFile, QStringLiteral("decimals"), 0, 6, i, issues, &point.decimals))
+            pointOk = false;
+
+        if (!pointOk)
+            continue;
+
+        out->append(point);
+    }
+    for (int k = issueCountBefore; k < issues->size(); ++k)
+    {
         if (issues->at(k).isError())
             return false;
     }
