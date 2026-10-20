@@ -15,6 +15,10 @@ public:
     static bool loadLinks(const QString &configDir,
                           QVector<LinkConfig> *out,
                           QVector<ConfigIssue> *issues);
+
+    static bool loadDevices(const QString &configDir,
+                          QVector<DeviceConfig> *out,
+                          QVector<ConfigIssue> *issues);
 };
 
 } // namespace dm

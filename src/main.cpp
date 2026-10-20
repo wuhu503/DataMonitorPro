@@ -263,6 +263,28 @@ void selfTestConfigLoader()
         line += (QStringLiteral("timeout=") + QString::number(link.responseTimeoutMs)
                  + QStringLiteral("ms")).leftJustified(16);
         line += QStringLiteral("retries=") + QString::number(link.retries);
+        line += QStringLiteral("  desc=%1").arg(link.description);
+        qDebug().noquote() << line;
+    }
+
+    // ---- devices.json ----
+    QVector<dm::DeviceConfig> devices;
+    QVector<dm::ConfigIssue> deviceIssues;
+    const bool devOk = dm::ConfigLoader::loadDevices(configDir, &devices, &deviceIssues);
+
+    for (const dm::ConfigIssue &issue : deviceIssues)
+        qDebug().noquote() << "  " << issue.toString();
+
+    check(devOk, QStringLiteral("loadDevices returns true"));
+    check(deviceIssues.isEmpty(), QStringLiteral("no device issues"));
+    check(devices.size() == 9, QStringLiteral("devices.json contains 9 devices"));
+
+    for (const dm::DeviceConfig &dev : devices) {
+        QString line = QStringLiteral("    %1").arg(dev.id, -18);
+        line += QStringLiteral("link=%1").arg(dev.linkId, -12);
+        line += QStringLiteral("slave=%1").arg(dev.slaveId, -4);
+        line += QStringLiteral("enabled=%1").arg(dev.enabled ? QStringLiteral("true")
+                                                             : QStringLiteral("false"));
         qDebug().noquote() << line;
     }
 
