@@ -1,7 +1,7 @@
 cmake_minimum_required(VERSION 3.19)
 project(DataMonitorPro LANGUAGES CXX)
 
-find_package(Qt6 6.5 REQUIRED COMPONENTS Core Widgets)
+find_package(Qt6 6.5 REQUIRED COMPONENTS Core Widgets Network)
 
 qt_standard_project_setup()
 
@@ -24,12 +24,19 @@ qt_add_executable(DataMonitorPro
     src/core/ConfigLoader.h
     src/core/ConfigLoader.cpp
     src/core/SystemConfig.cpp
+    src/core/Crc16.cpp
+    src/core/Crc16.h
+    src/core/RegisterCodec.h src/core/RegisterCodec.cpp
+    src/transport/ITransport.h
+    src/transport/TcpTransport.cpp
+    src/transport/TcpTransport.h
 )
 
 target_link_libraries(DataMonitorPro
     PRIVATE
         Qt::Core
         Qt::Widgets
+        Qt::Network
 )
 
 # 把源码树里的 config/ 目录路径编译进程序。

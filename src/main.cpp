@@ -2,12 +2,19 @@
 
 #include <QApplication>
 #include <QDebug>
+#include <QElapsedTimer>
 #include <QString>
 #include <QVector>
 
+#include <cmath>
+
 #include "core/ConfigLoader.h"
+#include "core/Crc16.h"
+#include "core/RegisterCodec.h"
 #include "core/SystemConfig.h"
 #include "core/Types.h"
+#include "transport/ITransport.h"
+#include "transport/TcpTransport.h"
 
 // ===============================================================
 // Types 自检（临时验证代码）
@@ -35,6 +42,252 @@ void check(bool ok, const QString &what)
         ++g_failed;
         qDebug().noquote() << "  [FAIL]" << what;
     }
+}
+
+// ===============================================================
+// CRC16 自检
+//
+// 期望值由独立的 Python 实现算出，不是拿被测代码"验自己"。
+// ===============================================================
+// ===============================================================
+// TcpTransport 自检（连接失败路径）
+//
+// 现在还没有服务端，所以只能验证"连不上"这条路径。
+// 成功路径要等 write/readExact 写完、并且起了仿真从站之后才能测。
+// ===============================================================
+void selfTestTcpTransport()
+{
+    qDebug().noquote() << "=== TcpTransport self-check ===";
+
+    // 127.0.0.1 上没有程序监听 59999
+    dm::TcpTransport transport(QStringLiteral("127.0.0.1"), 59999);
+
+    check(!transport.isOpen(), QStringLiteral("new transport starts closed"));
+    check(!transport.open(), QStringLiteral("connect to closed port fails"));
+    check(!transport.isOpen(), QStringLiteral("transport stays closed after failure"));
+    check(!transport.lastError().isEmpty(),
+          QStringLiteral("lastError is set after failure"));
+
+    transport.close();
+    check(!transport.isOpen(), QStringLiteral("close() leaves transport closed"));
+}
+
+// ===============================================================
+// TcpTransport 端到端测试
+//
+// 需要先启动 tools/echo_server.py——它按顺序提供三种行为：
+//   连接 1 echo   ：原样回
+//   连接 2 split  ：分两次发送（半包）
+//   连接 3 silent ：不回（超时）
+//
+// 单独运行：DataMonitorPro.exe --test-tcp
+// ===============================================================
+int runTcpIntegrationTest()
+{
+    qDebug().noquote() << "=== TcpTransport integration test ===";
+
+    const QString host = QStringLiteral("127.0.0.1");
+    const quint16 port = 15502;
+    // MBAP(7) + PDU(5) = 12 字节：
+    //   事务号 0001 | 协议号 0000 | 长度 0006 | 单元号 01 | 03 | 起始 0000 | 数量 0002
+    const QByteArray frame = QByteArray::fromHex("000100000006010300000002");
+
+    // ---- 1. 基本收发 ----
+    {
+        dm::TcpTransport transport(host, port);
+        check(transport.open(), QStringLiteral("echo: connect"));
+        check(transport.write(frame), QStringLiteral("echo: write 12 bytes"));
+
+        QByteArray response;
+        const bool ok = transport.readExact(frame.size(), &response, 1000);
+        check(ok, QStringLiteral("echo: readExact(12) returns true"));
+        check(response == frame, QStringLiteral("echo: bytes match"));
+    }
+
+    // ---- 2. 半包：服务端先发 4 字节，200ms 后再发 4 字节 ----
+    {
+        dm::TcpTransport transport(host, port);
+        check(transport.open(), QStringLiteral("split: connect"));
+        check(transport.write(frame), QStringLiteral("split: write 12 bytes"));
+
+        QByteArray response;
+        const bool ok = transport.readExact(frame.size(), &response, 2000);
+        check(ok, QStringLiteral("split: readExact waits for both chunks"));
+        check(response == frame, QStringLiteral("split: frame reassembled"));
+    }
+
+    // ---- 3. 超时：服务端收到但不回 ----
+    {
+        dm::TcpTransport transport(host, port);
+        check(transport.open(), QStringLiteral("timeout: connect"));
+        check(transport.write(frame), QStringLiteral("timeout: write 12 bytes"));
+
+        QByteArray response;
+        QElapsedTimer timer;
+        timer.start();
+        const bool ok = transport.readExact(frame.size(), &response, 400);
+        const qint64 elapsed = timer.elapsed();
+
+        check(!ok, QStringLiteral("timeout: readExact returns false"));
+        check(elapsed >= 300 && elapsed < 2000,
+              QStringLiteral("timeout: waited roughly 400ms"));
+    }
+
+    return g_failed == 0 ? 0 : 1;
+}
+
+void selfTestCrc16()
+{
+    qDebug().noquote() << "=== CRC16 self-check ===";
+
+    check(dm::crc16(QByteArray::fromHex("01030000000A")) == 0xCDC5,
+          QStringLiteral("crc16(01 03 00 00 00 0A) == 0xCDC5"));
+    check(dm::crc16(QByteArray::fromHex("010300000001")) == 0x0A84,
+          QStringLiteral("crc16(01 03 00 00 00 01) == 0x0A84"));
+    check(dm::crc16(QByteArray::fromHex("110300000002")) == 0x9BC6,
+          QStringLiteral("crc16(11 03 00 00 00 02) == 0x9BC6"));
+
+    // 空数据：循环一次都不跑，返回初值
+    check(dm::crc16(QByteArray()) == 0xFFFF,
+          QStringLiteral("crc16(empty) == 0xFFFF"));
+
+    // 改一个字节，结果必须变（防止"永远返回常量"这类实现）
+    check(dm::crc16(QByteArray::fromHex("01030000000A"))
+              != dm::crc16(QByteArray::fromHex("01030000000B")),
+          QStringLiteral("crc16 changes when one byte changes"));
+
+    // Modbus 的经典性质：把 CRC 低字节在前追加到帧尾后，
+    // 整帧再算一次 CRC 应得 0。
+    QByteArray frame = QByteArray::fromHex("01030000000A");
+    const quint16 crc = dm::crc16(frame);
+    frame.append(static_cast<char>(crc & 0xFF));
+    frame.append(static_cast<char>((crc >> 8) & 0xFF));
+    check(dm::crc16(frame) == 0x0000,
+          QStringLiteral("appended CRC makes whole-frame CRC == 0"));
+
+    qDebug().noquote() << QStringLiteral("  full frame: %1")
+                              .arg(QString::fromLatin1(frame.toHex(' ').toUpper()));
+}
+
+// ===============================================================
+// RegisterCodec 自检（第一层：16 位类型）
+//
+// 期望值：
+//   41 8C  uint16 → 16780
+//   FF FF  int16  → -1
+//   FF FF  uint16 → 65535
+//   02 D5  int16  → 725
+// ===============================================================
+void selfTestRegisterCodec()
+{
+    qDebug().noquote() << "=== RegisterCodec self-check ===";
+
+    double value = 0;
+
+    bool ok = dm::decodeRegisters(QByteArray::fromHex("418C"), dm::DataType::UInt16,
+                                  dm::ByteOrder::ABCD, &value);
+    check(ok && value == 16780.0, QStringLiteral("uint16 41 8C == 16780"));
+
+    value = 0;
+    ok = dm::decodeRegisters(QByteArray::fromHex("FFFF"), dm::DataType::Int16,
+                             dm::ByteOrder::ABCD, &value);
+    check(ok && value == -1.0, QStringLiteral("int16 FF FF == -1"));
+
+    value = 0;
+    ok = dm::decodeRegisters(QByteArray::fromHex("FFFF"), dm::DataType::UInt16,
+                             dm::ByteOrder::ABCD, &value);
+    check(ok && value == 65535.0, QStringLiteral("uint16 FF FF == 65535"));
+
+    value = 0;
+    ok = dm::decodeRegisters(QByteArray::fromHex("02D5"), dm::DataType::Int16,
+                             dm::ByteOrder::ABCD, &value);
+    check(ok && value == 725.0, QStringLiteral("int16 02 D5 == 725"));
+
+    // 负向：长度不足
+    check(!dm::decodeRegisters(QByteArray::fromHex("41"), dm::DataType::UInt16,
+                               dm::ByteOrder::ABCD, &value),
+          QStringLiteral("1 byte + uint16 returns false"));
+
+    // ---- 32 位（当前只处理 ABCD 字序）----
+    value = 0;
+    ok = dm::decodeRegisters(QByteArray::fromHex("0000007D"), dm::DataType::UInt32,
+                             dm::ByteOrder::ABCD, &value);
+    check(ok && value == 125.0, QStringLiteral("uint32 00 00 00 7D == 125"));
+
+    value = 0;
+    ok = dm::decodeRegisters(QByteArray::fromHex("FFFFFFFF"), dm::DataType::Int32,
+                             dm::ByteOrder::ABCD, &value);
+    check(ok && value == -1.0, QStringLiteral("int32 FF FF FF FF == -1"));
+
+    value = 0;
+    ok = dm::decodeRegisters(QByteArray::fromHex("FFFFFFFF"), dm::DataType::UInt32,
+                             dm::ByteOrder::ABCD, &value);
+    check(ok && value == 4294967295.0,
+          QStringLiteral("uint32 FF FF FF FF == 4294967295"));
+
+    value = 0;
+    ok = dm::decodeRegisters(QByteArray::fromHex("418CCCCD"), dm::DataType::Float32,
+                             dm::ByteOrder::ABCD, &value);
+    check(ok && std::abs(value - 17.6) < 1e-6,
+          QStringLiteral("float32 41 8C CC CD == 17.6"));
+
+    // ---- 四种字序：同一台设备，四种排列都应解出 17.6 ----
+    value = 0;
+    ok = dm::decodeRegisters(QByteArray::fromHex("CCCD418C"), dm::DataType::Float32,
+                             dm::ByteOrder::CDAB, &value);
+    check(ok && std::abs(value - 17.6) < 1e-6,
+          QStringLiteral("float32 CDAB CC CD 41 8C == 17.6"));
+
+    value = 0;
+    ok = dm::decodeRegisters(QByteArray::fromHex("8C41CDCC"), dm::DataType::Float32,
+                             dm::ByteOrder::BADC, &value);
+    check(ok && std::abs(value - 17.6) < 1e-6,
+          QStringLiteral("float32 BADC 8C 41 CD CC == 17.6"));
+
+    value = 0;
+    ok = dm::decodeRegisters(QByteArray::fromHex("CDCC8C41"), dm::DataType::Float32,
+                             dm::ByteOrder::DCBA, &value);
+    check(ok && std::abs(value - 17.6) < 1e-6,
+          QStringLiteral("float32 DCBA CD CC 8C 41 == 17.6"));
+
+    // 同样的字节，字序配错时必须解出完全不同的值
+    value = 0;
+    ok = dm::decodeRegisters(QByteArray::fromHex("418CCCCD"), dm::DataType::Float32,
+                             dm::ByteOrder::CDAB, &value);
+    check(ok && std::abs(value - 17.6) > 1.0,
+          QStringLiteral("wrong byte order gives a different value"));
+
+    // ---- decodePointValue：套上 scale / offset ----
+    dm::PointConfig p;
+    p.dataType  = dm::DataType::Int16;
+    p.byteOrder = dm::ByteOrder::ABCD;
+    p.scale     = 0.1;
+    p.offset    = 0.0;
+
+    value = 0;
+    ok = dm::decodePointValue(QByteArray::fromHex("02D5"), p, &value);
+    check(ok && std::abs(value - 72.5) < 1e-9,
+          QStringLiteral("point: 725 * 0.1 == 72.5"));
+
+    p.offset = -10.0;
+    value = 0;
+    ok = dm::decodePointValue(QByteArray::fromHex("02D5"), p, &value);
+    check(ok && std::abs(value - 62.5) < 1e-9,
+          QStringLiteral("point: 725 * 0.1 - 10 == 62.5"));
+
+    p.dataType = dm::DataType::Float32;
+    p.scale    = 1.0;
+    p.offset   = 0.0;
+    value = 0;
+    ok = dm::decodePointValue(QByteArray::fromHex("418CCCCD"), p, &value);
+    check(ok && std::abs(value - 17.6) < 1e-6,
+          QStringLiteral("point: float32 passthrough == 17.6"));
+
+    // 长度不足：必须失败，且不能污染 out
+    value = 999.0;
+    ok = dm::decodePointValue(QByteArray::fromHex("02"), p, &value);
+    check(!ok && value == 999.0,
+          QStringLiteral("short input fails and leaves out untouched"));
 }
 
 void selfTestTypes()
@@ -413,6 +666,13 @@ int main(int argc, char *argv[])
     // 直接跑，并用退出码判断结果（0 = 全过，1 = 有失败项）。
     const bool selfTestOnly = a.arguments().contains(QStringLiteral("--self-test"));
 
+    // --test-tcp：连本地回声服务器，验证 TcpTransport 的收发
+    if (a.arguments().contains(QStringLiteral("--test-tcp")))
+        return runTcpIntegrationTest();
+
+    selfTestCrc16();
+    selfTestTcpTransport();
+    selfTestRegisterCodec();
     selfTestTypes();
     selfTestConfigLoader();
 
