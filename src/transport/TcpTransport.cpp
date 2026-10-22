@@ -3,7 +3,7 @@
 
 namespace dm {
 namespace {
-    constexpr int kConnectTimeoutMs = 3000;
+constexpr int kConnectTimeoutMs = 3000;
 constexpr int kWriteTimeoutMs = 3000;
 }
 TcpTransport::TcpTransport(QString host, quint16 port)
@@ -14,7 +14,7 @@ TcpTransport::TcpTransport(QString host, quint16 port)
 }
 TcpTransport::~TcpTransport()
 {
-    close();
+    TcpTransport::close();
 }
 
 bool TcpTransport::open()

@@ -13,6 +13,8 @@
 #include "core/RegisterCodec.h"
 #include "core/SystemConfig.h"
 #include "core/Types.h"
+#include "protocol/ModbusTcp.h"
+#include "protocol/ModbusTcpClient.h"
 #include "transport/ITransport.h"
 #include "transport/TcpTransport.h"
 
@@ -134,6 +136,114 @@ int runTcpIntegrationTest()
     }
 
     return g_failed == 0 ? 0 : 1;
+}
+
+// ===============================================================
+// Modbus 端到端测试
+//
+// 需要先启动 tools/modbus_slave.py。
+// 单独运行：DataMonitorPro.exe --test-modbus
+// ===============================================================
+int runModbusIntegrationTest()
+{
+    qDebug().noquote() << "=== Modbus integration test ===";
+
+    dm::TcpTransport transport(QStringLiteral("127.0.0.1"), 15502);
+    check(transport.open(), QStringLiteral("connect to slave"));
+
+    dm::ModbusTcpClient client(&transport);
+
+    QByteArray data;
+    QString error;
+
+    // ---- 1. 正常读 2 个寄存器 ----
+    check(client.readRegisters(1, 3, 0, 2, &data, &error),
+          QStringLiteral("read 2 registers"));
+    check(data == QByteArray::fromHex("418CCCCD"),
+          QStringLiteral("data == 41 8C CC CD"));
+
+    // ---- 2. 解码成物理量 ----
+    dm::PointConfig point;
+    point.dataType  = dm::DataType::Float32;
+    point.byteOrder = dm::ByteOrder::ABCD;
+    point.scale     = 1.0;
+    point.offset    = 0.0;
+
+    double value = 0;
+    check(dm::decodePointValue(data, point, &value),
+          QStringLiteral("decode registers to physical value"));
+    check(std::abs(value - 17.6) < 1e-6,
+          QStringLiteral("physical value == 17.6"));
+
+    // ---- 3. 非法地址：从站返回异常帧 ----
+    check(!client.readRegisters(1, 3, 9999, 2, &data, &error),
+          QStringLiteral("illegal address is rejected"));
+    check(error.contains(QStringLiteral("非法数据地址")),
+          QStringLiteral("exception text mentions illegal address"));
+
+    // ---- 4. 从站慢响应：客户端超时 ----
+    check(!client.readRegisters(1, 3, 5000, 2, &data, &error),
+          QStringLiteral("slow response times out"));
+
+    // ---- 5. 超时后重连，避免迟到的响应污染下一次请求 ----
+    transport.close();
+    check(transport.open(), QStringLiteral("reconnect after timeout"));
+
+    // 每次读取前清空，避免失败时残留上一次的数据让后续比较"假通过"
+    data.clear();
+    check(client.readRegisters(1, 3, 0, 2, &data, &error),
+          QStringLiteral("read works after reconnect"));
+    check(data == QByteArray::fromHex("418CCCCD"),
+          QStringLiteral("data correct after reconnect"));
+
+    return g_failed == 0 ? 0 : 1;
+}
+
+// ===============================================================
+// ModbusTcp 组帧自检（纯函数，不需要网络）
+// ===============================================================
+void selfTestModbusTcp()
+{
+    qDebug().noquote() << "=== ModbusTcp self-check ===";
+
+    // 事务号 0001 | 协议号 0000 | 长度 0006 | 单元号 01 | 03 | 地址 0000 | 数量 0002
+    const QByteArray f1 = dm::ModbusTcp::buildReadRequest(0x0001, 1, 3, 0, 2);
+    check(f1.size() == 12, QStringLiteral("read request is 12 bytes"));
+    check(f1.mid(4, 2) == QByteArray::fromHex("0006"),
+          QStringLiteral("MBAP length field is 6"));
+    check(f1 == QByteArray::fromHex("000100000006010300000002"),
+          QStringLiteral("build(0x0001, 1, 3, 0, 2) matches expected frame"));
+
+    // 一个用例同时验证事务号/单元号/功能码/地址/数量的字节序
+    const QByteArray f2 = dm::ModbusTcp::buildReadRequest(0x1234, 11, 4, 100, 10);
+    check(f2 == QByteArray::fromHex("1234000000060B040064000A"),
+          QStringLiteral("build(0x1234, 11, 4, 100, 10) matches expected frame"));
+
+    // ---- 解析响应 ----
+    // 正常响应：事务号0001 协议号0000 长度0007 单元01 功能03 字节数04 数据418CCCCD
+    const QByteArray normal = QByteArray::fromHex("000100000007010304418CCCCD");
+    // 异常响应：功能码 0x83（03|0x80），异常码 0x02
+    const QByteArray exception = QByteArray::fromHex("000100000003018302");
+
+    QByteArray data;
+    QString error;
+
+    bool ok = dm::ModbusTcp::parseReadResponse(normal, 0x0001, 1, 3, &data, &error);
+    check(ok, QStringLiteral("normal response parses"));
+    check(data == QByteArray::fromHex("418CCCCD"),
+          QStringLiteral("normal response data == 41 8C CC CD"));
+
+    ok = dm::ModbusTcp::parseReadResponse(exception, 0x0001, 1, 3, &data, &error);
+    check(!ok, QStringLiteral("exception response is rejected"));
+    check(error.contains(QStringLiteral("非法数据地址")),
+          QStringLiteral("exception message mentions illegal address"));
+
+    ok = dm::ModbusTcp::parseReadResponse(normal, 0x0002, 1, 3, &data, &error);
+    check(!ok, QStringLiteral("transaction mismatch is rejected"));
+
+    ok = dm::ModbusTcp::parseReadResponse(QByteArray::fromHex("0001000000"),
+                                          0x0001, 1, 3, &data, &error);
+    check(!ok, QStringLiteral("short frame is rejected"));
 }
 
 void selfTestCrc16()
@@ -670,7 +780,12 @@ int main(int argc, char *argv[])
     if (a.arguments().contains(QStringLiteral("--test-tcp")))
         return runTcpIntegrationTest();
 
+    // --test-modbus：连本地 Modbus 仿真从站，验证整条读取链路
+    if (a.arguments().contains(QStringLiteral("--test-modbus")))
+        return runModbusIntegrationTest();
+
     selfTestCrc16();
+    selfTestModbusTcp();
     selfTestTcpTransport();
     selfTestRegisterCodec();
     selfTestTypes();

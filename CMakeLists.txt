@@ -30,6 +30,10 @@ qt_add_executable(DataMonitorPro
     src/transport/ITransport.h
     src/transport/TcpTransport.cpp
     src/transport/TcpTransport.h
+    src/protocol/ModbusTcp.h
+    src/protocol/ModbusTcp.cpp
+    src/protocol/ModbusTcpClient.h
+    src/protocol/ModbusTcpClient.cpp
 )
 
 target_link_libraries(DataMonitorPro
